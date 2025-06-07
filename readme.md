@@ -9,19 +9,16 @@
 
 # ✏️ Git Cleaner
 
-Welcome to the **Git Cleaner**!
+Welcome to the **Git Cleaner**! Ever used bad words in commits during a Hackathon? Fear not, **Git Cleaner** is here to help you edit and rebase your git architecture easily!
 
 <p align="center">
   <img src="./res/demo.png" alt="Demo of the projet" width="400"/>
 </p>
 
-## 📜 Description
-
-...
-
 ## 🚀 Features
 
-...
+- **Manually Edit** commit messages as you wish and easily!
+- **Edit in batch** if you really went overboard with your commits!
 
 ## ⚙️ Installation
 
