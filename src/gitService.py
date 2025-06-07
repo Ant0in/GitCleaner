@@ -1,12 +1,12 @@
 
-from Logger import Logger
+from .logger import Logger
 
 import sys
 import subprocess
 import pathlib
 import tempfile
 import os
-import itertools
+import json 
 
 
 class Commit:
@@ -69,8 +69,8 @@ class GitService:
             assert isinstance(command, list), "Command must be a list of strings."
             assert all(isinstance(arg, str) for arg in command), "All command arguments must be strings."
 
-            stdout = stdout if stdout is not None else subprocess.PIPE
-            stderr = stderr if stderr is not None else subprocess.PIPE
+            stdout = stdout if stdout else subprocess.PIPE
+            stderr = stderr if stderr else subprocess.PIPE
 
             result: subprocess.CompletedProcess = subprocess.run(command, stdout=stdout, stderr=stderr, env=env)
 
@@ -110,10 +110,6 @@ class GitService:
             bool: True if the folder is a git repository, False otherwise.
         """
 
-        # Validate the provided folder path
-        assert pathlib.Path(fp).exists(), "The provided path does not exist."
-        assert pathlib.Path(fp).is_dir(), "The provided path is not a directory."
-    
         try:
             result: subprocess.CompletedProcess = self.runGitCommand(
                 ['git', '-C', str(pathlib.Path(fp).resolve()), 'rev-parse', '--is-inside-work-tree']
@@ -150,16 +146,26 @@ class GitService:
     def abortRebase(self, fp: str) -> None:
         self.runGitCommand(['git', '-C', fp, 'rebase', '--abort'])
 
-    def renameCommit(self, fp: str, target: str, name: str) -> None:
+    def renameCommits(self, fp: str, targets: list[str], names: list[str]) -> None:
 
         commits: list[Commit] = self.getCommits(fp)
-        subset = list(itertools.takewhile(lambda c: not c.hashstr.startswith(target), commits))
-        subset.append(next(c for c in commits if c.hashstr.startswith(target)))
+        changeDict: dict[str: str] = {t[:7]: n for t, n in zip(targets, names, strict=True)}
+        targetHash: set[str] = set(changeDict.keys())
+
+        subset: list[str] = []
+        seen = set()
+        for c in commits:
+            h = c.hashstr[:7]
+            subset.append(c)
+            if h in targetHash:
+                seen.add(h)
+            if seen == targetHash:
+                break
         subset.reverse()
 
         lines: list[str] = list()
         for c in subset:
-            if c.hashstr == target: lines.append(f"reword {c.hashstr[:7]} {c.name}")
+            if c.hashstr in targets: lines.append(f"reword {c.hashstr[:7]} {c.name}")
             else: lines.append(f"pick {c.hashstr[:7]} {c.name}")
         # Create a temporary file to store the todo list for the rebase
         todo_file = tempfile.NamedTemporaryFile('w', delete=False, encoding='utf-8')
@@ -174,12 +180,24 @@ class GitService:
 
         # Write the new names into another temporary file
         msg_file = tempfile.NamedTemporaryFile('w', delete=False, encoding='utf-8')
-        msg_file.write(name)
+        json.dump(names, msg_file)
         msg_file.close()
 
         # Manage GIT EDITOR (replace commit editmsg)
         editor_script = tempfile.NamedTemporaryFile('w', delete=False, suffix='.py', encoding='utf-8')
-        editor_script.write(f"import sys\nmsg_file = r\"{msg_file.name}\"\ntarget = sys.argv[1]\nwith open(msg_file, 'r', encoding='utf-8') as inp, open(target, 'w', encoding='utf-8') as out: out.write(inp.read())")
+        editor_script.write(
+            f"import sys, json\n"
+            f"path = sys.argv[1]\n"
+            f"queue_path = r\"{msg_file.name}\"\n"
+            f"with open(queue_path, 'r+', encoding='utf-8') as f:\n"
+            f"    msgs = json.load(f)\n"
+            f"    if not msgs:\n"
+            f"        exit(0)\n"
+            f"    msg = msgs.pop(0)\n"
+            f"    f.seek(0); f.truncate(); json.dump(msgs, f)\n"
+            f"with open(path, 'w', encoding='utf-8') as f:\n"
+            f"    f.write(msg)\n"
+        )
         editor_script.close()
 
         # Prepare the environment for the git command
@@ -187,7 +205,8 @@ class GitService:
         env['GIT_SEQUENCE_EDITOR'] = f'python "{seq_editor_script.name}"'
         env['GIT_EDITOR'] = f'python "{editor_script.name}"'
 
-        self.runGitCommand(['git', '-C', fp, 'rebase', '-i', f'{target}^'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        first: str = subset[0].hashstr[:7]
+        self.runGitCommand(['git', '-C', fp, 'rebase', '-i', f'{first}^'], env=env)
 
         # Clean up temporary files
         os.remove(todo_file.name)
@@ -195,15 +214,6 @@ class GitService:
         os.remove(msg_file.name)
         os.remove(editor_script.name)
 
+    def renameCommit(self, fp: str, target: str, name: str) -> None:
+        self.renameCommits(fp, [target], [name])
 
-
-if __name__ == "__main__":
-
-    git_service: GitService = GitService(Logger(description="GitServiceLogger"))
-    
-    TEST_FOLDER: str = r"C:\Users\antoi\Desktop\test"
-    
-    git_service.abortRebase(TEST_FOLDER)
-    print(f"Commits in the repository: {git_service.getCommits(TEST_FOLDER)}")
-    git_service.renameCommit(TEST_FOLDER, "b883db3", "yeah!")
-    
